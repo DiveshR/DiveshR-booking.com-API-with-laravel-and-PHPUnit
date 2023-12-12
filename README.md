@@ -113,7 +113,7 @@ class Permission extends Model
 ```
  - We have the relationship between roles and permissions
 
- ///////////////////////////////////////////////////////////////////
+----------------------------------------------------------------------------------------
 
  # User: One Role or Multiple Roles?
 
