@@ -217,12 +217,12 @@ We will create only one method and use the Controller as Invokable Single-Action
 
 ````php
 php artisan make:controller Api/v1/Auth/RegisterController --invokable
-``
+``````
 routes/api.php:
 
 ````php
 Route::post('auth/register', App\Http\Controllers\Auth\RegisterController::class);
-``
+```````
 
 - Create Form Requests
 
@@ -230,7 +230,7 @@ For more complex validation scenarios, you may wish to create a "form request". 
 
 ````php
 php artisan make:request api/v1/RegisterRequest
-``
+``````
 ```php
 <?php
 
@@ -266,11 +266,11 @@ class RegisterRequest extends FormRequest
     }
 }
 
-```
+````````
 
 - App\Http\Controllers\Api\v1\Auth
 
-```php
+``````php
 <?php
 
 namespace App\Http\Controllers\Api\v1\Auth;
@@ -299,4 +299,4 @@ class RegisterController extends Controller
     }
 }
 
-```
+````````
