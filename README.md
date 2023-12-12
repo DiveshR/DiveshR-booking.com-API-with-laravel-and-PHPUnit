@@ -204,3 +204,99 @@ php artisan migrate --seed
 ```
 
 Our next goal is to implement the registration API and test that users get their roles correctly.
+
+-------------------------------------------------------------------------------------------------
+
+# Registration API: Assign Permissions and Test Them
+
+Let's say that we will have two registration forms: one for a simple user, and another for the property owner. So, let's simulate both of them and write automated tests that would check if users get the correct role/permissions.
+
+Let's group them into one endpoint POST /api/v1/auth/register, 
+
+We will create only one method and use the Controller as Invokable Single-Action Controller.
+
+````php
+php artisan make:controller Api/v1/Auth/RegisterController --invokable
+``
+routes/api.php:
+
+````php
+Route::post('auth/register', App\Http\Controllers\Auth\RegisterController::class);
+``
+
+- Create Form Requests
+
+For more complex validation scenarios, you may wish to create a "form request". Form requests are custom request classes that encapsulate their own validation and authorization logic. 
+
+````php
+php artisan make:request api/v1/RegisterRequest
+``
+```php
+<?php
+
+namespace App\Http\Requests\api\v1;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rules\Password;
+use Illuminate\Validation\Rule;
+
+class RegisterRequest extends FormRequest
+{
+    /**
+     * Determine if the user is authorized to make this request.
+     */
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /**
+     * Get the validation rules that apply to the request.
+     *
+     * @return array<string, \Illuminate\Contracts\Validation\ValidationRule|array<mixed>|string>
+     */
+    public function rules(): array
+    {
+        return [
+            'name' => ['required','string', 'max:255'],
+            'email' => ['required','string','email','max:255','unique:users'],
+            'password' => ['required','confirmed',Password::defaults()],
+            'role_id' => ['required',Rule::in(2,3)],
+        ];
+    }
+}
+
+```
+
+- App\Http\Controllers\Api\v1\Auth
+
+```php
+<?php
+
+namespace App\Http\Controllers\Api\v1\Auth;
+
+use App\Http\Controllers\Controller;
+use App\Http\Requests\api\v1\RegisterRequest;
+use App\Models\User;
+
+class RegisterController extends Controller
+{
+    /**
+     * Handle the incoming request.
+     */
+    public function __invoke(RegisterRequest $request)
+    {
+        $user = User::create([
+            'name' => $request->name,
+            'email' => $request->email,
+            'password' => bcrypt($request->password),
+            'role_id' => $request->role_id,
+        ]);
+
+        return response()->json([
+            'access_token' => $user->createToken('client')->plainTextToken,
+        ]);
+    }
+}
+
+```
