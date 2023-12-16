@@ -41,7 +41,9 @@ $table->string('name');
 
 * app/Models/Role.php:
 
-```php protected $fillable = ['name']; ``````
+```php 
+protected $fillable = ['name']; 
+``````
 
 * Seeder to seed Roles
 
@@ -57,11 +59,15 @@ php artisan make:model Permission -m
 ``````
 
 * Migration:
-```php $table->string('name');``````
+```php 
+$table->string('name');
+``````
 
 * app/Models/Permission.php:
 
-```php protected $fillable = ['name'];``````
+```php 
+protected $fillable = ['name'];
+``````
 
 * Now, the relationship. It should be a many-to-many, because both each role may have many permissions, and also each permission may belong to many roles.
 
@@ -299,4 +305,119 @@ class RegisterController extends Controller
     }
 }
 
-````````
+I'm assuming we use Laravel Sanctum for the Auth
+
+So, after the validation, we can create the User with `role_id => 3`, which is the Simple User, according to our Seeder above
+
+In the validation, we have that Rule::in(2, 3) hardcoded. You would probably agree that this 2, 3 isn't readable or understandable at the first glance to a new developer, as it's hard to remember which role is ID 2 or 3. Let's introduce a few constants inside a Role model.
+
+```php
+class Role extends Model
+{
+    const ROLE_ADMINISTRATOR = 1;
+    const ROLE_OWNER = 2;
+    const ROLE_USER = 3;
+ 
+    // ...
+}
+````
+
+Then in RegisterRequest:
+
+````php
+    public function rules(): array
+    {
+        return [
+            // ...
+            'role_id' => ['required', Rule::in(Role::ROLE_OWNER,Role::ROLE_USER)]
+        ];
+    }
+````
+
+Let's test how it works, by building automated test.
+
+I edit the default phpunit.xml file to uncomment these two lines:
+
+```php
+<env name="DB_CONNECTION" value="sqlite"/>
+<env name="DB_DATABASE" value=":memory:"/>
+
+``````
+
+NOTICE: For demo projects like this one, it's typically fine to use an in-memory database, but in the real-world scenario I often set up a separate testing MySQL database to run tests on
+
+Let's generate our first test that would check if the registration works.
+
+```php
+php artisan make:test AuthTest
+
+``````
+
+tests/Feature/AuthTest.php:
+
+````php
+
+class AuthTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_registration_fails_with_admin_role()
+    {
+        $response = $this->postJson('api/v1/auth/register', [
+            'name' => 'test',
+            'email' => 'test@gmail.com',
+            'password' => 'testPassword',
+            'password_confirmation' => 'testPassword',
+            'role_id' => Role::ROLE_ADMINISTRATOR,
+        ]);
+
+        $response->assertStatus(422);
+    }
+
+    public function test_registration_succeeds_with_owner_role()
+    {
+        $response = $this->postJson('api/v1/auth/register', [
+            'name' => 'test Owner',
+            'email' => 'testOwner@gmail.com',
+            'password' => 'testPassword',
+            'password_confirmation' => 'testPassword',
+            'role_id' => Role::ROLE_OWNER,
+        ]);
+        $response->assertStatus(200)->assertJsonStructure([
+            'access_token',
+        ]);
+    }
+
+    public function test_registration_succeeds_with_user_role()
+    {
+        $response = $this->postJson('api/v1/auth/register',[
+            'name' => 'test User',
+            'email' => 'testUser@gmail.com',
+            'password' => 'testPassword',
+            'password_confirmation' => 'testPassword',
+            'role_id' => Role::ROLE_USER,
+
+        ]);
+        $response->assertStatus(200)->assertJsonStructure([
+            'access_token',
+        ]);
+    }
+    /**
+     * A basic feature test example.
+     */
+    public function test_example(): void
+    {
+        $response = $this->get('/');
+
+        $response->assertStatus(200);
+    }
+}
+
+``````
+
+We have three methods, each of which tests the registration with each of the roles.
+Now run test.
+
+```php
+php artisan test
+``````
