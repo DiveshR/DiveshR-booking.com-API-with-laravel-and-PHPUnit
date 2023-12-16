@@ -303,7 +303,7 @@ class RegisterController extends Controller
             'access_token' => $user->createToken('client')->plainTextToken,
         ]);
     }
-}
+} `````
 
 I'm assuming we use Laravel Sanctum for the Auth
 
