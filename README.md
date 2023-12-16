@@ -277,8 +277,6 @@ class RegisterRequest extends FormRequest
 - App\Http\Controllers\Api\v1\Auth
 
 ``````php
-<?php
-
 namespace App\Http\Controllers\Api\v1\Auth;
 
 use App\Http\Controllers\Controller;
