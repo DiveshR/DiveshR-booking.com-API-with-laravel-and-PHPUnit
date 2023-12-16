@@ -52,13 +52,4 @@ class AuthTest extends TestCase
             'access_token',
         ]);
     }
-    /**
-     * A basic feature test example.
-     */
-    public function test_example(): void
-    {
-        $response = $this->get('/');
-
-        $response->assertStatus(200);
-    }
 }

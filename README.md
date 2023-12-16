@@ -400,15 +400,6 @@ class AuthTest extends TestCase
             'access_token',
         ]);
     }
-    /**
-     * A basic feature test example.
-     */
-    public function test_example(): void
-    {
-        $response = $this->get('/');
-
-        $response->assertStatus(200);
-    }
 }
 
 ``````
@@ -419,3 +410,341 @@ Now run test.
 ```php
 php artisan test
 ``````
+
+Now create a few endpoints for the logged-in users and test if we have the correct access to them.
+
+Let's say that our property owner will have access to the list of their properties, and the regular user will have access to their bookings.
+
+Let's add those permissions as a seeder, and group them for more permissions.
+
+```php
+php artisan make:seeder PermissionSeeder
+````
+
+database/seeders/PermissionSeeder.php:
+
+```php
+namespace Database\Seeders;
+
+use App\Models\Permission;
+use App\Models\Role;
+use Illuminate\Database\Console\Seeds\WithoutModelEvents;
+use Illuminate\Database\Seeder;
+
+class PermissionSeeder extends Seeder
+{
+    /**
+     * Run the database seeds.
+     */
+    public function run(): void
+    {
+        $allRoles = Role::all()->keyBy('id');
+
+        $permissions = [
+            'properties-manage' => [Role::ROLE_OWNER],
+            'bookings-manage' => [Role::ROLE_USER],
+        ];
+
+        foreach($permissions as $key=> $roles)
+        {
+            $permission = Permission::create(['name' => $key]);
+
+            foreach($roles as $role)
+            {
+                $allRoles[$role]->permissions()->attach($permission->id);
+            }
+        }
+    }
+}
+```
+
+Now, as we have all the other data in the DB already, we can run this single seeder:
+
+```php
+php artisan db:seed PermissionSeeder
+```
+
+And now let's use those permissions on the actual routes.
+
+```php
+php artisan make:controller Api/v1/Owner/PropertyController
+php artisan make:controller Api/v1/User/BookingController
+```
+
+routes/api.php:
+
+```php
+Route::prefix('v1')->group(function () {
+    Route::post('auth/register',RegisterController::class);
+
+    Route::middleware('auth:sanctum')->group(function(){
+
+        Route::get('owner/properties', [PropertyController::class,'index']);
+        Route::get('user/bookings', [BookingController::class,'index']);
+    });
+});
+```
+
+And then let's use our Gates in the Controllers:
+
+````php
+namespace App\Http\Controllers\Api\v1\Owner;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+
+class PropertyController extends Controller
+{
+    public function index()
+    {
+        $this->authorize('properties-manage');
+
+        return response()->json(['success' => true]);
+    }
+}
+
+````
+
+````php
+namespace App\Http\Controllers\Api\v1\User;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+
+class BookingController extends Controller
+{
+    public function index()
+    {
+        $this->authorize('bookings-manage');
+
+        return response()->json(['success' => true]);
+    }
+}
+
+````
+Now, for $this->authorize() to work, we need to actually define the Gates for the application.
+
+We will generate a Middleware specifically for that and enable that Middleware to run on every API request.
+
+```php
+php artisan make:middleware GateDefineMiddleware
+```
+app/Http/Middleware/GateDefineMiddleware.php:
+
+
+```php
+namespace App\Http\Middleware;
+
+use App\Models\Permission;
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+use Illuminate\Support\Facades\Gate;
+
+class GateDefineMiddleware
+{
+    /**
+     * Handle an incoming request.
+     *
+     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
+     */
+    public function handle(Request $request, Closure $next): Response
+    {
+        if(auth()->check()){
+            $permissions = Permission::whereHas('roles', function($query){
+                $query->where('roles.id', auth()->user()->role_id);
+            })->get();
+
+            foreach($permissions as $permission)
+            {
+                Gate::define($permission->name, fn() => true);
+            }
+        }
+        return $next($request);
+    }
+}
+
+`````
+
+We register our middleware to run in the api group.
+
+app/Http/Kernel.php:
+
+
+
+```php
+
+namespace App\Http;
+
+use App\Http\Middleware\GateDefineMiddleware;
+use Illuminate\Foundation\Http\Kernel as HttpKernel;
+
+class Kernel extends HttpKernel
+{
+    /**
+     * The application's global HTTP middleware stack.
+     *
+     * These middleware are run during every request to your application.
+     *
+     * @var array<int, class-string|string>
+     */
+    protected $middleware = [
+        // \App\Http\Middleware\TrustHosts::class,
+        \App\Http\Middleware\TrustProxies::class,
+        \Illuminate\Http\Middleware\HandleCors::class,
+        \App\Http\Middleware\PreventRequestsDuringMaintenance::class,
+        \Illuminate\Foundation\Http\Middleware\ValidatePostSize::class,
+        \App\Http\Middleware\TrimStrings::class,
+        \Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
+    ];
+
+    /**
+     * The application's route middleware groups.
+     *
+     * @var array<string, array<int, class-string|string>>
+     */
+    protected $middlewareGroups = [
+        'web' => [
+            \App\Http\Middleware\EncryptCookies::class,
+            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+            \Illuminate\Session\Middleware\StartSession::class,
+            \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+            \App\Http\Middleware\VerifyCsrfToken::class,
+            \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        ],
+
+        'api' => [
+            // \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
+            \Illuminate\Routing\Middleware\SubstituteBindings::class,
+            GateDefineMiddleware::class,
+        ],
+    ];
+
+    /**
+     * The application's middleware aliases.
+     *
+     * Aliases may be used instead of class names to conveniently assign middleware to routes and groups.
+     *
+     * @var array<string, class-string|string>
+     */
+    protected $middlewareAliases = [
+        'auth' => \App\Http\Middleware\Authenticate::class,
+        'auth.basic' => \Illuminate\Auth\Middleware\AuthenticateWithBasicAuth::class,
+        'auth.session' => \Illuminate\Session\Middleware\AuthenticateSession::class,
+        'cache.headers' => \Illuminate\Http\Middleware\SetCacheHeaders::class,
+        'can' => \Illuminate\Auth\Middleware\Authorize::class,
+        'guest' => \App\Http\Middleware\RedirectIfAuthenticated::class,
+        'password.confirm' => \Illuminate\Auth\Middleware\RequirePassword::class,
+        'precognitive' => \Illuminate\Foundation\Http\Middleware\HandlePrecognitiveRequests::class,
+        'signed' => \App\Http\Middleware\ValidateSignature::class,
+        'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
+        'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
+    ];
+}
+
+
+```
+
+Now, all we need to do to check if the middleware is working is to launch the API endpoints for the user and the property owner separately, with the Bearer Token that we received from the registration endpoint.
+
+Now, automated tests should cover those cases, too. So let's generate one.
+
+```php
+php artisan make:test propertiesTest
+```
+
+```php
+namespace Tests\Feature;
+
+use App\Models\User;
+use App\Models\Role;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\WithFaker;
+use Tests\TestCase;
+
+class PropertiesTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_property_owner_has_access_to_properties_feature()
+    {
+        $owner = User::factory()->create(['role_id' => Role::ROLE_OWNER]);
+        $response = $this->actingAs($owner)->getJson('api/v1/owner/properties');
+        $response->assertStatus(200);
+    }
+
+    public function test_user_does_not_have_access_to_properties_feature()
+    {
+        $user = User::factory()->create(['role_id' => Role::ROLE_USER]);
+        $response = $this->actingAs($user)->getJson('api/v1/owner/properties');
+        $response->assertStatus(403);
+    }
+}
+```
+
+Now we need to make a change in the base TestCase to run the seeds for the roles/permissions, for our tests. Cause the default RefreshDatabase will just run the migrations, but not the data seeds.
+
+tests/TestCase.php:
+
+```php
+namespace Tests;
+
+use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+
+abstract class TestCase extends BaseTestCase
+{
+    use CreatesApplication;
+    
+    public function setUp(): void
+    {
+        parent::setUp();
+        $this->seed();
+    }
+}
+````
+
+Also, in the same fashion, let's generate the identical test to check for the bookings list permissions as a simple user.
+
+```php
+php artisan make:test BookingTest
+```
+
+tests/Feature/BookingsTest.php:
+
+```php
+namespace Tests\Feature;
+
+use App\Models\Role;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\WithFaker;
+use Tests\TestCase;
+
+class BookingTest extends TestCase
+{
+    use RefreshDatabase;
+    
+    public function test_user_has_access_to_bookings_feature()
+    {
+        $user = User::factory()->create(['role_id' => Role::ROLE_USER]);
+        $response = $this->actingAs($user)->getJson('api/v1/user/bookings');
+
+        $response->assertStatus(200);
+    }
+
+    public function test_property_owner_does_not_have_access_to_bookings_feature()
+    {
+        $owner = User::factory()->create(['role_id' => Role::ROLE_OWNER]);
+        $response = $this->actingAs($owner)->getJson('api/v1/user/bookings');
+
+        $response->assertStatus(403);
+    }
+}
+
+````
+
+```php
+php artisan test
+````
+We successfully simulated the registration for two user roles and their permissions for specific API endpoints!
