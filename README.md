@@ -275,7 +275,6 @@ class RegisterRequest extends FormRequest
 ````````
 
 - App\Http\Controllers\Api\v1\Auth
-
 ```php
 namespace App\Http\Controllers\Api\v1\Auth;
 
@@ -301,7 +300,8 @@ class RegisterController extends Controller
             'access_token' => $user->createToken('client')->plainTextToken,
         ]);
     }
-} `````
+}
+```
 
 I'm assuming we use Laravel Sanctum for the Auth
 
