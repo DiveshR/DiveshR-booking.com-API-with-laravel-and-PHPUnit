@@ -3,6 +3,8 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\v1\Owner\PropertyController;
+use App\Http\Controllers\Api\v1\User\BookingController;
+use App\Http\Controllers\Api\v1\Public\PropertySearchController;
 
 /*
 |--------------------------------------------------------------------------
@@ -18,7 +20,16 @@ use App\Http\Controllers\Api\v1\Owner\PropertyController;
 
 Route::middleware('auth:sanctum')->group(function () {
 
-    Route::post('owner/properties', [PropertyController::class, 'store']);
+    Route::prefix('owner')->group(function (){
+        Route::get('properties', [PropertyController::class, 'index']);
+        Route::post('properties', [PropertyController::class, 'store']);
+    });
+
+    Route::prefix('user')->group(function (){
+        Route::get('bookings', [BookingController::class, 'index']);
+    });
  
 });
+
+Route::get('search', PropertySearchController::class);
 
