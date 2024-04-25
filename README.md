@@ -8,191 +8,277 @@ Re Creating Booking.com API with Laravel and PHPUnit.
 
 - All of that is covered by automated tests with PHPUnit.
 
-## Lesson - 1 
 
-- Create our simple DB structure for roles/permissions
-- Create first API endpoints and PHPUnit Tests for registration
-- Simulate API endpoints for logged-in users and write tests to check permissions
-- Alternative: look at the spatie/laravel-permission package
+# Profile Fields Structure
 
- # Simple Permissions with Gates
+## Goals of This Lesson
 
-- Manage properties
-- Make booking
-- Change the user's password
-- etc.
+* Think about different ways of structuring profiles in DB
+* Add the necessary fields
 
-* We will have three roles, at least:
+# Users Table or Profile Table?
 
-- Administrator
-- Property owner
-- Simple User
+Common fields for both users/owners:
 
-* Roles and Permissions in the DB
+* Full name
+* Display name
+* Phone number
+* Email and phone confirmation
+* Photo
+* Invoices: country, city, postcode, address
 
-```php
-  php artisan make:model Role -ms
-``````
+Simple users have these extra "individual" fields:
 
-* Migration:
-$table->string('name');
+* Gender
+* Nationality
+* Date of birth
 
-- Make the name fillable:
+Then, property owners don't have to specify gender/nationality/birth date, but they have only one "special" extra field: description about themselves.
 
-* app/Models/Role.php:
+Yeah, it's pretty simple. Property owners have only one personal field, everything else is related to their properties.
 
-```php 
-protected $fillable = ['name']; 
-``````
+So, all the common fields should probably be in the users DB table, just some of them nullable?
 
-* Seeder to seed Roles
+First, we clearly need the migration for the countries table:
 
 ```php
-  Role::create(['name' => 'Administrator']);
-  Role::create(['name' => 'Property Owner']);
-  Role::create(['name' => 'Simple User']);
-``````
-- Next, each role will have multiple Permissions. So let's store them in the database, too. The DB structure is identical to the Role:
+php artisan make:model Country -m
+```
 
 ```php
-php artisan make:model Permission -m
-``````
-
-* Migration:
-```php 
-$table->string('name');
-``````
-
-* app/Models/Permission.php:
-
-```php 
-protected $fillable = ['name'];
-``````
-
-* Now, the relationship. It should be a many-to-many, because both each role may have many permissions, and also each permission may belong to many roles.
-
-```php
-php artisan make:migration create_permission_role_table
-``````
-
-* Migration:
-
-$table->foreignId('permission_id')->constrained();
-$table->foreignId('role_id')->constrained();
-
-- And we add the methods for relationships, in both Models:
-
-* app/Models/Role.php:
-
-```php
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-
-class Role extends Model
-{
-    use HasFactory;
-
-    protected $fillable = ['name'];
-
-    public function permissions(): BelongsToMany
+    public function up(): void
     {
-        return $this->belongsToMany(Permission::class);
+        Schema::create('countries', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->timestamps();
+        });
     }
-}
-```
+````
 
-* app/Models/Permission.php:
+Common fields for both users/owners:
+
+ - Full name
+ - Display name
+ - Phone number
+ - Email and phone confirmation
+ - Photo
+ - Invoices: country, city, postcode, address
+
+Simple users have these extra "individual" fields:
+
+ - Gender
+ - Nationality
+ - Date of birth
 
 ```php
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+php artisan make:migration add_additional_fields_to_users_table
+````
 
-class Permission extends Model
-{
-    use HasFactory;
+```php
+        Schema::table('users', function (Blueprint $table) {
+            $table->string('display_name')->nullable()->after('id');
+            $table->string('phone_number')->nullable()->after('email_verified_at');
+            $table->string('photo')->after('phone_number')->nullable();
+            $table->timestamp('phone_verified_at')->nullable()->after('photo');
+        });
+````
 
-    protected $fillable = ['name'];
+```php
+php artisan make:model UserProfile -m
+```
 
-    public function roles():BelongsToMany
+```php
+    public function profile()
     {
-        return $this->belongsToMany(Role::class);
+        return $this->hasOne(UserProfile::class);
     }
-}
-```
- - We have the relationship between roles and permissions
-
-----------------------------------------------------------------------------------------
-
- # User: One Role or Multiple Roles?
-
- There are two layers of managing permissions:
-
-* Admin adds the permissions and then specifies which roles have certain permissions
-* For users, the admin/system assigns the ROLES to them, which in itself includes the permissions
-
-* Add Role id to user table.
-
-```php
-php artisan make:migration add_role_id_to_users_table
 ```
 
-Migration:
+Migration for User Profiles:
 
 ```php
-  $table->foreignId('role_id')->after('email')->constrained();
-```
+        Schema::create('user_profiles', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('user_id')->constrained();
+            $table->string('invoice_address')->nullable();
+            $table->string('invoice_postcode')->nullable();
+            $table->string('invoice_city')->nullable();
+            $table->foreignId('invoice_country_id')->nullable()->constrained('countries');
+            $table->string('gender')->nullable();
+            $table->date('birth_date')->nullable();
+            $table->foreignId('nationality_country_id')->nullable()->constrained('countries');
+            $table->text('description')->nullable();
+            $table->timestamps();
+        });
+`````
 
-app/Models/User.php:
-
-```php
- class User extends Authenticatable
-{
-    protected $fillable = [
-        'name',
-        'email',
-        'password',
-        'role_id',
-    ];
+Now, the User::all() in the code would return only the main User fields, and if someone wants to know the invoice details, they would do User::with('profile')->get().
  
-    public function role()
+-----------------------------------------------------------------------------
+
+# Properties and Apartments
+
+
+##  Countries, Cities, Geographical Objects
+
+
+ The next thing we'll work on is adding real estate properties: houses/homes to rent. In this particular lesson, we will focus on adding the geographical data for city, country, and latitude/longitude.
+
+### Goals of This Lesson
+
+- Build a DB schema for countries, cities, and geographical objects, seeding a few of each
+- Build a first version of DB schema for properties, with geographical data
+- Automatically set property latitude/longitude based on the address, with Observer and Google Maps API
+- First version of API endpoint to create a property, covered by PHPUnit test
+
+First, let's add the latitude and longitude columns to the DB table of countries.
+
+```php
+php artisan make:migration add_geocoordinates_to_countries_table
+```
+
+```php
+        Schema::table('countries', function (Blueprint $table) {
+            $table->after('name', function () use ($table) {
+                $table->decimal('lat', 10, 7)->nullable();
+                $table->decimal('long', 10, 7)->nullable();
+            });
+        });
+````
+
+Next, we will definitely build a search by city, so we need a model for that as well, with coordinates.
+
+```php
+php artisan make:model City -ms
+```
+
+```php
+class City extends Model
+{
+    use HasFactory;
+
+    protected $fillable = ['country_id', 'name', 'lat', 'long'];
+
+    public function country(): BelongsTo
     {
-        return $this->belongsTo(Role::class);
+        return $this->belongsTo(Country::class);
     }
+}
+
+````
+```php
+Schema::create('cities', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('country_id')->constrained();
+    $table->string('name');
+    $table->decimal('lat', 10, 7)->nullable();
+    $table->decimal('long', 10, 7)->nullable();
+    $table->timestamps();
+});
+```
+
+Finally, let's create a separate database table for geographical locations, such as "Taj Mahal" or "India Gate", cause people often search by them.
+
+
+Search by geolocation
+
+```php
+php artisan make:model Geoobject -ms
+````
+
+app/Models/Geoobject.php:
+
+```php
+class Geoobject extends Model
+{
+    use HasFactory;
+ 
+    protected $fillable = ['city_id', 'name', 'lat', 'long'];
 }
 ```
 
-So, at the moment of the registration, our new users will choose whether they are looking for a property to rent, or want to publish their own property for rent.
+```php
+        Schema::create('geoobjects', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('city_id')->nullable()->constrained();
+            $table->string('name');
+            $table->decimal('lat', 10, 7)->nullable();
+            $table->decimal('long', 10, 7)->nullable();
+            $table->timestamps();
+        });
+````
+
+Next, let's build the Seeders for all those new tables. We will use them to automatically run seeds in our automated tests, too. So, we fill in a few countries, a few cities, and a few geographical objects.
 
 ```php
-php artisan make:seeder AdminUserSeeder
-```
+php artisan make:seeder CitySeeder
+php artisan make:seeder GeoobjectSeeder
+php artisan make:seeder CountrySeeder
+`````
 
-
-```php
-php artisan make:seeder AdminUserSeeder
-```
-
-database/seeders/AdminUserSeeder.php:
+database/seeders/CountrySeeder.php:
 
 ```php
-class AdminUserSeeder extends Seeder
-{
-    /**
-     * Run the database seeds.
-     */
     public function run(): void
     {
-        User::class([
-            'name' => 'Administrator',
-            'email' => 'superadmin@gmail.com',
-            'password' => bcrypt('password'),
-            'email_verified_at' => now(),
-            'role_id' => 1, //Administrator
+        Country::create([
+            'name' => 'India',
+            'lat' => 20.5937,
+            'long' => 78.9629
+        ]);
+        Country::create([
+            'name' => 'China',
+            'lat' => 35.8617,
+            'long' => 104.1954
         ]);
     }
-}
-``````
+```
 
-Then, we add both seeders to the main DatabaseSeeder.
-database/seeders/DatabaseSeeder.php:
+database/seeders/CitySeeder.php:
+
+```php
+    public function run(): void
+    {
+        City::create([
+            'country_id' => 1,
+            'name' => 'Dehradun',
+            'lat' => 30.3165,
+            'long' => 78.0322,
+        ]);
+
+        City::create([
+            'country_id' => 2,
+            'name' => 'Beijing',
+            'lat' => 39.9042,
+            'long' => 116.4074,
+        ]);
+    }
+```
+
+database/seeders/GeoobjectSeeder.php:
+
+```php
+    public function run(): void
+    {
+        Geoobject::create([
+            'city_id' => 1,
+            'name' => 'Indian Military Academy',
+            'lat' => 30.3382,
+            'long' => 77.9922
+        ]);
+
+        Geoobject::create([
+            'city_id' => 2,
+            'name' => 'Baliqiao',
+            'lat' => 32.511,
+            'long' => 120.833
+        ]);
+    }
+
+````
+
+Then we, of course, add them all to the main DatabaseSeeder, which now will look like this:
 
 ```php
 class DatabaseSeeder extends Seeder
@@ -201,550 +287,435 @@ class DatabaseSeeder extends Seeder
     {
         $this->call(RoleSeeder::class);
         $this->call(AdminUserSeeder::class);
+        $this->call(PermissionSeeder::class);
+ 
+        $this->call(CountrySeeder::class);
+        $this->call(CitySeeder::class);
+        $this->call(GeoobjectSeeder::class);
+    }
+}
+````
+
+Great, now we have some geographical entities to play around with, now let's go to the actual properties!
+
+```php
+php artisan make:model Property -ms
+```
+
+And here's the schema with the main fields, for now. There will be more, but at the moment, we focus on geographical things for the search, remember?
+
+Migration for properties
+
+```php
+        Schema::create('properties', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('owner_id')->constrained('users');
+            $table->string('name');
+            $table->foreignId('city_id')->constrained();
+            $table->string('address_street');
+            $table->string('address_postcode')->nullable();
+            $table->decimal('lat', 10, 7)->nullable();
+            $table->decimal('long', 10, 7)->nullable();
+            $table->timestamps();
+        });
+```
+app/Models/Property.php:
+
+```php
+
+class Property extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'owner_id',
+        'name',
+        'city_id',
+        'address_street',
+        'address_postcode',
+        'lat',
+        'long',
+    ];
+
+    public function city(): BelongsTo
+    {
+        return $this->belongsTo(City::class);
+    }
+
+```
+
+Now, when someone enters a new property, wouldn't it be nice if lat/long fields would be automatically populated, by street address?
+
+We will use a package called Geocode addresses to coordinates that allows you to easily integrate Google Maps API in your Laravel project.
+
+```php
+composer require spatie/geocoder
+
+php artisan vendor:publish --provider="Spatie\Geocoder\GeocoderServiceProvider" --tag="config"
+
+````
+Then, we add the Google Maps API key (read here how to get it) to the .env file:
+
+GOOGLE_MAPS_GEOCODING_API_KEY=AIzaSyAWRsRGOFbTXRlLHDOSudkerLjUtBfElUt
+
+To automate all this process, we create an Observer file, to watch for the creation of the new Properties.
+
+```php
+php artisan make:observer PropertyObserver --model=Property
+````
+app/Observers/PropertyObserver.php:
+
+```php
+namespace App\Observers;
+
+use App\Models\Property;
+use Spatie\Geocoder\Geocoder;
+
+class PropertyObserver
+{
+    public function creating(Property $property)
+    {
+        // We also add the owner automatically
+        if (auth()->check()) {
+            $property->owner_id = auth()->id();
+        }
+
+
+
+        if (is_null($property->lat) && is_null($property->long)) {
+
+            $fullAddress = $property->address_street . ', '
+                . $property->address_postcode . ', '
+                . $property->city->name . ', '
+                . $property->city->country->name;
+
+            $coordinates = Geocoder::getCoordinatesForAddress($fullAddress);
+
+            $property->lat = $coordinates->lat;
+            $property->long = $coordinates->lng;
+        }
+    }
+}
+
+```
+
+Finally, we register that Observer, let's do it directly in the Model.
+
+app/Models/Property.php:
+
+```php
+use App\Observers\PropertyObserver;
+ 
+class Property extends Model
+{
+    // ...
+ 
+    public static function booted()
+    {
+        parent::booted();
+ 
+        self::observe(PropertyObserver::class);
     }
 }
 ```
-Launch the migrations with seeds:
+
+Creating Property: Route/Controller/Request
+Now, let's build a Controller/Route to create a new property, and add a Form Request , too.
+
 ```php
-php artisan migrate --seed
+php artisan make:controller Api/v1/Owner/PropertyController
+php artisan make:request StorePropertyRequest
 ```
 
-Our next goal is to implement the registration API and test that users get their roles correctly.
-
--------------------------------------------------------------------------------------------------
-
-# Registration API: Assign Permissions and Test Them
-
-Let's say that we will have two registration forms: one for a simple user, and another for the property owner. So, let's simulate both of them and write automated tests that would check if users get the correct role/permissions.
-
-Let's group them into one endpoint POST /api/v1/auth/register, 
-
-We will create only one method and use the Controller as Invokable Single-Action Controller.
-
-````php
-php artisan make:controller Api/v1/Auth/RegisterController --invokable
-``````
-routes/api.php:
-
-````php
-Route::post('auth/register', App\Http\Controllers\Auth\RegisterController::class);
-```````
-
-- Create Form Requests
-
-For more complex validation scenarios, you may wish to create a "form request". Form requests are custom request classes that encapsulate their own validation and authorization logic. 
-
-````php
-php artisan make:request api/v1/RegisterRequest
-``````
+app/Http/Controllers/Api/v1/Owner/PropertyController.php:
 ```php
-<?php
-
-namespace App\Http\Requests\api\v1;
-
-use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rules\Password;
-use Illuminate\Validation\Rule;
-
-class RegisterRequest extends FormRequest
-{
-    /**
-     * Determine if the user is authorized to make this request.
-     */
-    public function authorize(): bool
+    public function store(StorePropertyRequest $request)
     {
-        return true;
+        $this->authorize('properties-manage');
+ 
+        return Property::create($request->validated());
     }
+```
+StorePropertyRequest.php
 
-    /**
-     * Get the validation rules that apply to the request.
-     *
-     * @return array<string, \Illuminate\Contracts\Validation\ValidationRule|array<mixed>|string>
-     */
+```php
+
     public function rules(): array
     {
         return [
-            'name' => ['required','string', 'max:255'],
-            'email' => ['required','string','email','max:255','unique:users'],
-            'password' => ['required','confirmed',Password::defaults()],
-            'role_id' => ['required',Rule::in(2,3)],
+            'name' => 'required',
+            'city_id' => 'required|exists:cities,id',
+            'address_street' => 'required',
+            'address_postcode' => 'required',
         ];
     }
-}
+```
 
-````````
+As you can see, we require only the name/city/address, as owner/lat/long will be filled automatically by the Observer.
 
-- App\Http\Controllers\Api\v1\Auth
+Finally, the new route:
+
 ```php
-namespace App\Http\Controllers\Api\v1\Auth;
+    Route::post('owner/properties',
+        [\App\Http\Controllers\Owner\PropertyController::class, 'store']);
+```
+
+Finally, in this lesson, let's add the automatic test that it actually works.
+
+tests/Feature/PropertiesTest.php:
+
+```php artisan make:test PropertiesTest```
+
+PropertiesTest.php
+```php
+    public function test_property_owner_can_add_property()
+    {
+        $owner = User::factory()->create(['role_id' => Role::ROLE_OWNER]);
+        $response = $this->actingAs($owner)->postJson('/api/owner/properties', [
+            'name' => 'My property',
+            'city_id' => City::value('id'),
+            'address_street' => 'Street Address 1',
+            'address_postcode' => '12345',
+        ]);
+ 
+        $response->assertSuccessful();
+        $response->assertJsonFragment(['name' => 'My property']);
+    }
+```
+
+A debatable question is whether we should leave the auto-coordinates enabled while testing. Probably not, as we don't want to get charged for Google API every time we run automated tests, right?
+
+So, this is how I disable that part of the Observer:
+
+app/Observers/PropertyObserver.php:
+
+```php
+
+
+class PropertyObserver
+{
+    public function creating(Property $property)
+    {
+        if (is_null($property->lat) && is_null($property->long) && !(app()->environment('testing'))) {
+ 
+            // ... getting the coordinates
+ 
+        }
+    }
+}
+````
+
+-----------------------------------------------------------------------------------------
+
+# Search for Property by City or GeoObject
+
+## Goals of This Lesson
+
+- Create API endpoint (Route + Controller) for searching the properties by city, country, or geographical object
+- Write PHPUnit tests for all those cases
+
+# Creating Controller and Route
+
+We will search with these criteria:
+
+- By city
+- By country
+- Close to a geographical object (by its latitude/longitude)
+
+Let's build the controller and method for this.
+
+```php
+php artisan make:controller Api/v1/Public/PropertySearchController  --invokable
+```
+
+app/Http/Controllers/Api/v1/Public/PropertySearchController.php:
+
+```php
+namespace App\Http\Controllers\Api\v1\Public;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\api\v1\RegisterRequest;
-use App\Models\User;
+use App\Models\Property;
+use Illuminate\Http\Request;
 
-class RegisterController extends Controller
+class PropertySearchController extends Controller
 {
     /**
      * Handle the incoming request.
      */
-    public function __invoke(RegisterRequest $request)
+    public function __invoke(Request $request)
     {
-        $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => bcrypt($request->password),
-            'role_id' => $request->role_id,
-        ]);
-
-        return response()->json([
-            'access_token' => $user->createToken('client')->plainTextToken,
-        ]);
+        return Property::with('city')
+           //
+           ->get();
     }
-}
-```
+`````
 
-I'm assuming we use Laravel Sanctum for the Auth
+As you can see, we're adding another namespace of /Public, so we'll have three zones: owner, user, and public.
 
-So, after the validation, we can create the User with `role_id => 3`, which is the Simple User, according to our Seeder above
-
-In the validation, we have that Rule::in(2, 3) hardcoded. You would probably agree that this 2, 3 isn't readable or understandable at the first glance to a new developer, as it's hard to remember which role is ID 2 or 3. Let's introduce a few constants inside a Role model.
-
-```php
-class Role extends Model
-{
-    const ROLE_ADMINISTRATOR = 1;
-    const ROLE_OWNER = 2;
-    const ROLE_USER = 3;
- 
-    // ...
-}
-````
-
-Then in RegisterRequest:
-
-````php
-    public function rules(): array
-    {
-        return [
-            // ...
-            'role_id' => ['required', Rule::in(Role::ROLE_OWNER,Role::ROLE_USER)]
-        ];
-    }
-````
-
-Let's test how it works, by building automated test.
-
-I edit the default phpunit.xml file to uncomment these two lines:
-
-```php
-<env name="DB_CONNECTION" value="sqlite"/>
-<env name="DB_DATABASE" value=":memory:"/>
-
-``````
-
-NOTICE: For demo projects like this one, it's typically fine to use an in-memory database, but in the real-world scenario I often set up a separate testing MySQL database to run tests on
-
-Let's generate our first test that would check if the registration works.
-
-```php
-php artisan make:test AuthTest
-
-``````
-
-tests/Feature/AuthTest.php:
-
-````php
-
-class AuthTest extends TestCase
-{
-    use RefreshDatabase;
-
-    public function test_registration_fails_with_admin_role()
-    {
-        $response = $this->postJson('api/v1/auth/register', [
-            'name' => 'test',
-            'email' => 'test@gmail.com',
-            'password' => 'testPassword',
-            'password_confirmation' => 'testPassword',
-            'role_id' => Role::ROLE_ADMINISTRATOR,
-        ]);
-
-        $response->assertStatus(422);
-    }
-
-    public function test_registration_succeeds_with_owner_role()
-    {
-        $response = $this->postJson('api/v1/auth/register', [
-            'name' => 'test Owner',
-            'email' => 'testOwner@gmail.com',
-            'password' => 'testPassword',
-            'password_confirmation' => 'testPassword',
-            'role_id' => Role::ROLE_OWNER,
-        ]);
-        $response->assertStatus(200)->assertJsonStructure([
-            'access_token',
-        ]);
-    }
-
-    public function test_registration_succeeds_with_user_role()
-    {
-        $response = $this->postJson('api/v1/auth/register',[
-            'name' => 'test User',
-            'email' => 'testUser@gmail.com',
-            'password' => 'testPassword',
-            'password_confirmation' => 'testPassword',
-            'role_id' => Role::ROLE_USER,
-
-        ]);
-        $response->assertStatus(200)->assertJsonStructure([
-            'access_token',
-        ]);
-    }
-}
-
-``````
-
-We have three methods, each of which tests the registration with each of the roles.
-Now run test.
-
-```php
-php artisan test
-``````
-
-Now create a few endpoints for the logged-in users and test if we have the correct access to them.
-
-Let's say that our property owner will have access to the list of their properties, and the regular user will have access to their bookings.
-
-Let's add those permissions as a seeder, and group them for more permissions.
-
-```php
-php artisan make:seeder PermissionSeeder
-````
-
-database/seeders/PermissionSeeder.php:
-
-```php
-namespace Database\Seeders;
-
-use App\Models\Permission;
-use App\Models\Role;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
-use Illuminate\Database\Seeder;
-
-class PermissionSeeder extends Seeder
-{
-    /**
-     * Run the database seeds.
-     */
-    public function run(): void
-    {
-        $allRoles = Role::all()->keyBy('id');
-
-        $permissions = [
-            'properties-manage' => [Role::ROLE_OWNER],
-            'bookings-manage' => [Role::ROLE_USER],
-        ];
-
-        foreach($permissions as $key=> $roles)
-        {
-            $permission = Permission::create(['name' => $key]);
-
-            foreach($roles as $role)
-            {
-                $allRoles[$role]->permissions()->attach($permission->id);
-            }
-        }
-    }
-}
-```
-
-Now, as we have all the other data in the DB already, we can run this single seeder:
-
-```php
-php artisan db:seed PermissionSeeder
-```
-
-And now let's use those permissions on the actual routes.
-
-```php
-php artisan make:controller Api/v1/Owner/PropertyController
-php artisan make:controller Api/v1/User/BookingController
-```
+And let's add the route, also grouping the owner/user routes with prefixes.
 
 routes/api.php:
 
 ```php
-Route::prefix('v1')->group(function () {
-    Route::post('auth/register',RegisterController::class);
+Route::middleware('auth:sanctum')->group(function () {
 
-    Route::middleware('auth:sanctum')->group(function(){
-
-        Route::get('owner/properties', [PropertyController::class,'index']);
-        Route::get('user/bookings', [BookingController::class,'index']);
+    Route::prefix('owner')->group(function (){
+        Route::get('properties', [PropertyController::class, 'index']);
+        Route::post('properties', [PropertyController::class, 'store']);
     });
+
+    Route::prefix('user')->group(function (){
+        Route::get('bookings', [BookingController::class, 'index']);
+    });
+ 
 });
-```
 
-And then let's use our Gates in the Controllers:
+Route::get('search', PropertySearchController::class);
 
-````php
-namespace App\Http\Controllers\Api\v1\Owner;
+``````
 
-use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
 
-class PropertyController extends Controller
+Our search should be public for everyone, without any registration, so we put that route outside of the auth:sanctum Middleware group.
+
+Now, let's start filling in various search cases. For that, we will use the Eloquent syntax of Model::when() with different conditions.
+
+### Search by City
+
+```php
+class PropertySearchController extends Controller
 {
-    public function index()
+    public function __invoke(Request $request)
     {
-        $this->authorize('properties-manage');
-
-        return response()->json(['success' => true]);
+        return Property::with('city')
+            ->when($request->city, function($query) use ($request) {
+                $query->where('city_id', $request->city);
+            })
+            ->get();
     }
 }
 
 ````
 
-````php
-namespace App\Http\Controllers\Api\v1\User;
+And let's  write the test for it.
 
-use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
+```php
+php artisan make:test PropertySearchTest
 
-class BookingController extends Controller
-{
-    public function index()
+````
+
+In the test method, we create two properties with different cities and check that only ONE is returned from the search.
+
+To create those fake properties, we also need to create a Factory for creating the test properties:
+
+```php
+php artisan make:factory PropertyFactory --model=Property
+```
+
+```php
+    public function definition(): array
     {
-        $this->authorize('bookings-manage');
+        return [
+            'owner_id' => User::where('role_id', Role::ROLE_OWNER)->value('id'),
+            'name' => fake()->text(20),
+            'city_id' => City::value('id'),
+            'address_street' => fake()->streetAddress(),
+            'address_postcode' => fake()->postcode(),
+            'lat' => fake()->latitude(),
+            'long' => fake()->longitude(),
+        ];
+    }
+```
 
-        return response()->json(['success' => true]);
+The method value('id') is a shorter way of doing ->first()->id.
+
+tests/Feature/PropertySearchTest.php:
+
+```php
+    public function test_property_search_by_city_return_correct_result()
+    {
+        $owner = User::factory()->create(['role_id' => Role::ROLE_OWNER]);
+        $cities = City::take(2)->pluck('id');
+        $propertyInCity = Property::factory()->create(['owner_id' => $owner->id, 'city_id' => $cities[0]]);
+        $propertyInAnotherCity = Property::factory()->create(['owner_id' => $owner->id, 'city_id' => $cities[1]]);
+
+        $response = $this->getJson('api/v1/search?city='. $cities[0]);
+
+        $response->assertStatus(200);
+        $response->assertJsonCount(1);
+        $response->assertJsonFragment(['id' => $propertyInCity->id]);
+    }
+
+````
+
+### Search by Geographical Object
+
+What if someone searches for a property near India Gate? No problem, if we know its coordinates and then launch the search by distance, with raw SQL condition.
+
+
+Another new when() in the Controller, with adding a Geoobject search inside.
+
+
+app/Http/Controllers/Api/v1/Public/PropertySearchController.php:
+
+```php
+class PropertySearchController extends Controller
+{
+    public function __invoke(Request $request)
+    {
+        return Property::with('city')
+            ->when($request->city, function($query) use ($request) {
+                $query->where('city_id', $request->city);
+            })
+            ->when($request->country, function($query) use ($request) {
+                $query->whereHas('city', fn($q) => $q->where('country_id', $request->country));
+            })
+            ->when($request->geoobject, function($query) use ($request) {
+                $geoobject = Geoobject::find($request->geoobject);
+                if ($geoobject) {
+                    $condition = "(
+                        6371 * acos(
+                            cos(radians(" . $geoobject->lat . "))
+                            * cos(radians(`lat`))
+                            * cos(radians(`long`) - radians(" . $geoobject->long . "))
+                            + sin(radians(" . $geoobject->lat . ")) * sin(radians(`lat`))
+                        ) < 10
+                    )";
+                    $query->whereRaw($condition);
+                }
+            })
+            ->get();
     }
 }
 
+
 ````
-Now, for $this->authorize() to work, we need to actually define the Gates for the application.
 
-We will generate a Middleware specifically for that and enable that Middleware to run on every API request.
+tests/Feature/PropertySearchTest.php:
 
-```php
-php artisan make:middleware GateDefineMiddleware
-```
-app/Http/Middleware/GateDefineMiddleware.php:
-
-
-```php
-namespace App\Http\Middleware;
-
-use App\Models\Permission;
-use Closure;
-use Illuminate\Http\Request;
-use Symfony\Component\HttpFoundation\Response;
-use Illuminate\Support\Facades\Gate;
-
-class GateDefineMiddleware
+````php
+public function test_property_search_by_geoobject_returns_correct_results(): void
 {
-    /**
-     * Handle an incoming request.
-     *
-     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
-     */
-    public function handle(Request $request, Closure $next): Response
-    {
-        if(auth()->check()){
-            $permissions = Permission::whereHas('roles', function($query){
-                $query->where('roles.id', auth()->user()->role_id);
-            })->get();
-
-            foreach($permissions as $permission)
-            {
-                Gate::define($permission->name, fn() => true);
-            }
-        }
-        return $next($request);
-    }
+    $owner = User::factory()->create(['role_id' => Role::ROLE_OWNER]);
+    $cityId = City::value('id');
+    $geoobject = Geoobject::first();
+    $propertyNear = Property::factory()->create([
+        'owner_id' => $owner->id,
+        'city_id' => $cityId,
+        'lat' => $geoobject->lat,
+        'long' => $geoobject->long,
+    ]);
+    $propertyFar = Property::factory()->create([
+        'owner_id' => $owner->id,
+        'city_id' => $cityId,
+        'lat' => $geoobject->lat + 10,
+        'long' => $geoobject->long - 10,
+    ]);
+ 
+    $response = $this->getJson('/api/search?geoobject=' . $geoobject->id);
+ 
+    $response->assertStatus(200);
+    $response->assertJsonCount(1);
+    $response->assertJsonFragment(['id' => $propertyNear->id]);
 }
 
 `````
-
-We register our middleware to run in the api group.
-
-app/Http/Kernel.php:
-
-
-
-```php
-
-namespace App\Http;
-
-use App\Http\Middleware\GateDefineMiddleware;
-use Illuminate\Foundation\Http\Kernel as HttpKernel;
-
-class Kernel extends HttpKernel
-{
-    /**
-     * The application's global HTTP middleware stack.
-     *
-     * These middleware are run during every request to your application.
-     *
-     * @var array<int, class-string|string>
-     */
-    protected $middleware = [
-        // \App\Http\Middleware\TrustHosts::class,
-        \App\Http\Middleware\TrustProxies::class,
-        \Illuminate\Http\Middleware\HandleCors::class,
-        \App\Http\Middleware\PreventRequestsDuringMaintenance::class,
-        \Illuminate\Foundation\Http\Middleware\ValidatePostSize::class,
-        \App\Http\Middleware\TrimStrings::class,
-        \Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
-    ];
-
-    /**
-     * The application's route middleware groups.
-     *
-     * @var array<string, array<int, class-string|string>>
-     */
-    protected $middlewareGroups = [
-        'web' => [
-            \App\Http\Middleware\EncryptCookies::class,
-            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
-            \Illuminate\Session\Middleware\StartSession::class,
-            \Illuminate\View\Middleware\ShareErrorsFromSession::class,
-            \App\Http\Middleware\VerifyCsrfToken::class,
-            \Illuminate\Routing\Middleware\SubstituteBindings::class,
-        ],
-
-        'api' => [
-            // \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
-            \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
-            \Illuminate\Routing\Middleware\SubstituteBindings::class,
-            GateDefineMiddleware::class,
-        ],
-    ];
-
-    /**
-     * The application's middleware aliases.
-     *
-     * Aliases may be used instead of class names to conveniently assign middleware to routes and groups.
-     *
-     * @var array<string, class-string|string>
-     */
-    protected $middlewareAliases = [
-        'auth' => \App\Http\Middleware\Authenticate::class,
-        'auth.basic' => \Illuminate\Auth\Middleware\AuthenticateWithBasicAuth::class,
-        'auth.session' => \Illuminate\Session\Middleware\AuthenticateSession::class,
-        'cache.headers' => \Illuminate\Http\Middleware\SetCacheHeaders::class,
-        'can' => \Illuminate\Auth\Middleware\Authorize::class,
-        'guest' => \App\Http\Middleware\RedirectIfAuthenticated::class,
-        'password.confirm' => \Illuminate\Auth\Middleware\RequirePassword::class,
-        'precognitive' => \Illuminate\Foundation\Http\Middleware\HandlePrecognitiveRequests::class,
-        'signed' => \App\Http\Middleware\ValidateSignature::class,
-        'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
-        'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
-    ];
-}
-
-
-```
-
-Now, all we need to do to check if the middleware is working is to launch the API endpoints for the user and the property owner separately, with the Bearer Token that we received from the registration endpoint.
-
-Now, automated tests should cover those cases, too. So let's generate one.
-
-```php
-php artisan make:test propertiesTest
-```
-
-```php
-namespace Tests\Feature;
-
-use App\Models\User;
-use App\Models\Role;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Foundation\Testing\WithFaker;
-use Tests\TestCase;
-
-class PropertiesTest extends TestCase
-{
-    use RefreshDatabase;
-
-    public function test_property_owner_has_access_to_properties_feature()
-    {
-        $owner = User::factory()->create(['role_id' => Role::ROLE_OWNER]);
-        $response = $this->actingAs($owner)->getJson('api/v1/owner/properties');
-        $response->assertStatus(200);
-    }
-
-    public function test_user_does_not_have_access_to_properties_feature()
-    {
-        $user = User::factory()->create(['role_id' => Role::ROLE_USER]);
-        $response = $this->actingAs($user)->getJson('api/v1/owner/properties');
-        $response->assertStatus(403);
-    }
-}
-```
-
-Now we need to make a change in the base TestCase to run the seeds for the roles/permissions, for our tests. Cause the default RefreshDatabase will just run the migrations, but not the data seeds.
-
-tests/TestCase.php:
-
-```php
-namespace Tests;
-
-use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
-
-abstract class TestCase extends BaseTestCase
-{
-    use CreatesApplication;
-    
-    public function setUp(): void
-    {
-        parent::setUp();
-        $this->seed();
-    }
-}
-````
-
-Also, in the same fashion, let's generate the identical test to check for the bookings list permissions as a simple user.
-
-```php
-php artisan make:test BookingTest
-```
-
-tests/Feature/BookingsTest.php:
-
-```php
-namespace Tests\Feature;
-
-use App\Models\Role;
-use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Foundation\Testing\WithFaker;
-use Tests\TestCase;
-
-class BookingTest extends TestCase
-{
-    use RefreshDatabase;
-    
-    public function test_user_has_access_to_bookings_feature()
-    {
-        $user = User::factory()->create(['role_id' => Role::ROLE_USER]);
-        $response = $this->actingAs($user)->getJson('api/v1/user/bookings');
-
-        $response->assertStatus(200);
-    }
-
-    public function test_property_owner_does_not_have_access_to_bookings_feature()
-    {
-        $owner = User::factory()->create(['role_id' => Role::ROLE_OWNER]);
-        $response = $this->actingAs($owner)->getJson('api/v1/user/bookings');
-
-        $response->assertStatus(403);
-    }
-}
-
-````
-
-```php
-php artisan test
-````
-We successfully simulated the registration for two user roles and their permissions for specific API endpoints!
