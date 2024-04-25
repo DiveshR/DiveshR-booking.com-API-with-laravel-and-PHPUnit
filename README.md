@@ -15,7 +15,6 @@ Re Creating Booking.com API with Laravel and PHPUnit.
 
 * Think about different ways of structuring profiles in DB
 * Add the necessary fields
-* Look at a different project scenario: doctors/patients
 
 # Users Table or Profile Table?
 
@@ -506,4 +505,217 @@ class PropertyObserver
 }
 ````
 
+-----------------------------------------------------------------------------------------
 
+# Search for Property by City or GeoObject
+
+## Goals of This Lesson
+
+- Create API endpoint (Route + Controller) for searching the properties by city, country, or geographical object
+- Write PHPUnit tests for all those cases
+
+# Creating Controller and Route
+
+We will search with these criteria:
+
+- By city
+- By country
+- Close to a geographical object (by its latitude/longitude)
+
+Let's build the controller and method for this.
+
+```php
+php artisan make:controller Api/v1/Public/PropertySearchController  --invokable
+```
+
+app/Http/Controllers/Api/v1/Public/PropertySearchController.php:
+
+```php
+namespace App\Http\Controllers\Api\v1\Public;
+
+use App\Http\Controllers\Controller;
+use App\Models\Property;
+use Illuminate\Http\Request;
+
+class PropertySearchController extends Controller
+{
+    /**
+     * Handle the incoming request.
+     */
+    public function __invoke(Request $request)
+    {
+        return Property::with('city')
+           //
+           ->get();
+    }
+`````
+
+As you can see, we're adding another namespace of /Public, so we'll have three zones: owner, user, and public.
+
+And let's add the route, also grouping the owner/user routes with prefixes.
+
+routes/api.php:
+
+```php
+Route::middleware('auth:sanctum')->group(function () {
+
+    Route::prefix('owner')->group(function (){
+        Route::get('properties', [PropertyController::class, 'index']);
+        Route::post('properties', [PropertyController::class, 'store']);
+    });
+
+    Route::prefix('user')->group(function (){
+        Route::get('bookings', [BookingController::class, 'index']);
+    });
+ 
+});
+
+Route::get('search', PropertySearchController::class);
+
+``````
+
+
+Our search should be public for everyone, without any registration, so we put that route outside of the auth:sanctum Middleware group.
+
+Now, let's start filling in various search cases. For that, we will use the Eloquent syntax of Model::when() with different conditions.
+
+### Search by City
+
+```php
+class PropertySearchController extends Controller
+{
+    public function __invoke(Request $request)
+    {
+        return Property::with('city')
+            ->when($request->city, function($query) use ($request) {
+                $query->where('city_id', $request->city);
+            })
+            ->get();
+    }
+}
+
+````
+
+And let's  write the test for it.
+
+```php
+php artisan make:test PropertySearchTest
+
+````
+
+In the test method, we create two properties with different cities and check that only ONE is returned from the search.
+
+To create those fake properties, we also need to create a Factory for creating the test properties:
+
+```php
+php artisan make:factory PropertyFactory --model=Property
+```
+
+```php
+    public function definition(): array
+    {
+        return [
+            'owner_id' => User::where('role_id', Role::ROLE_OWNER)->value('id'),
+            'name' => fake()->text(20),
+            'city_id' => City::value('id'),
+            'address_street' => fake()->streetAddress(),
+            'address_postcode' => fake()->postcode(),
+            'lat' => fake()->latitude(),
+            'long' => fake()->longitude(),
+        ];
+    }
+```
+
+The method value('id') is a shorter way of doing ->first()->id.
+
+tests/Feature/PropertySearchTest.php:
+
+```php
+    public function test_property_search_by_city_return_correct_result()
+    {
+        $owner = User::factory()->create(['role_id' => Role::ROLE_OWNER]);
+        $cities = City::take(2)->pluck('id');
+        $propertyInCity = Property::factory()->create(['owner_id' => $owner->id, 'city_id' => $cities[0]]);
+        $propertyInAnotherCity = Property::factory()->create(['owner_id' => $owner->id, 'city_id' => $cities[1]]);
+
+        $response = $this->getJson('api/v1/search?city='. $cities[0]);
+
+        $response->assertStatus(200);
+        $response->assertJsonCount(1);
+        $response->assertJsonFragment(['id' => $propertyInCity->id]);
+    }
+
+````
+
+### Search by Geographical Object
+
+What if someone searches for a property near India Gate? No problem, if we know its coordinates and then launch the search by distance, with raw SQL condition.
+
+
+Another new when() in the Controller, with adding a Geoobject search inside.
+
+
+app/Http/Controllers/Api/v1/Public/PropertySearchController.php:
+
+```php
+class PropertySearchController extends Controller
+{
+    public function __invoke(Request $request)
+    {
+        return Property::with('city')
+            ->when($request->city, function($query) use ($request) {
+                $query->where('city_id', $request->city);
+            })
+            ->when($request->country, function($query) use ($request) {
+                $query->whereHas('city', fn($q) => $q->where('country_id', $request->country));
+            })
+            ->when($request->geoobject, function($query) use ($request) {
+                $geoobject = Geoobject::find($request->geoobject);
+                if ($geoobject) {
+                    $condition = "(
+                        6371 * acos(
+                            cos(radians(" . $geoobject->lat . "))
+                            * cos(radians(`lat`))
+                            * cos(radians(`long`) - radians(" . $geoobject->long . "))
+                            + sin(radians(" . $geoobject->lat . ")) * sin(radians(`lat`))
+                        ) < 10
+                    )";
+                    $query->whereRaw($condition);
+                }
+            })
+            ->get();
+    }
+}
+
+
+````
+
+tests/Feature/PropertySearchTest.php:
+
+````php
+public function test_property_search_by_geoobject_returns_correct_results(): void
+{
+    $owner = User::factory()->create(['role_id' => Role::ROLE_OWNER]);
+    $cityId = City::value('id');
+    $geoobject = Geoobject::first();
+    $propertyNear = Property::factory()->create([
+        'owner_id' => $owner->id,
+        'city_id' => $cityId,
+        'lat' => $geoobject->lat,
+        'long' => $geoobject->long,
+    ]);
+    $propertyFar = Property::factory()->create([
+        'owner_id' => $owner->id,
+        'city_id' => $cityId,
+        'lat' => $geoobject->lat + 10,
+        'long' => $geoobject->long - 10,
+    ]);
+ 
+    $response = $this->getJson('/api/search?geoobject=' . $geoobject->id);
+ 
+    $response->assertStatus(200);
+    $response->assertJsonCount(1);
+    $response->assertJsonFragment(['id' => $propertyNear->id]);
+}
+
+`````
