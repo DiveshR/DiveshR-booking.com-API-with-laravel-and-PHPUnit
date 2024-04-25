@@ -15,7 +15,6 @@ Re Creating Booking.com API with Laravel and PHPUnit.
 
 * Think about different ways of structuring profiles in DB
 * Add the necessary fields
-* Look at a different project scenario: doctors/patients
 
 # Users Table or Profile Table?
 
